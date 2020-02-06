@@ -1,0 +1,510 @@
+---
+title: "DATA2002"
+author: "Alex, Mohammed, Nick, Sherry "
+subtitle: "Group project T14-05"
+date: "University of Sydney | DATA2002 | 10/2019"
+output:
+  xaringan::moon_reader:
+    css: ["default", "assets/sydney-fonts.css", "assets/sydney.css"]
+    self_contained: false # if true, fonts will be stored locally
+    seal: true # show a title slide with YAML information
+    includes:
+      in_header: "assets/mathjax-equation-numbers.html"
+    nature:
+      beforeInit: ["assets/remark-zoom.js", "https://platform.twitter.com/widgets.js"]
+      highlightStyle: github
+      highlightLines: true
+      countIncrementalSlides: false
+      ratio: '16:9' # alternatives '16:9' or '4:3' or others e.g. 13:9
+      navigation:
+        scroll: false # disable slide transitions by scrolling
+---
+
+```{r setup , include=FALSE}
+
+library(sjPlot)
+library(broom)
+library(leaps)
+library(tidyverse)
+library(janitor)
+library(kableExtra)
+library(gendercodeR)
+library(dplyr)
+library(caret)
+library(ggfortify)
+library(RefManageR)
+
+```
+
+```{r,, include=FALSE }
+abalone = read.table("abalone.data", col.names = c('sex', 'length', 'diameter', 'height', 'allweight', 'skweight', 'vweight', 'shweight', 'rings'), sep = ",")
+abalone$age = abalone$rings + 1.5
+colnames(abalone)
+head(abalone)
+```
+
+
+
+## Data set
+
+
+
+.font100.brand-yellow[**Source of the data**]
+
+.font80[The data set is originally sourced from the Marine Resource Laboratories - Taroona from the Department of Primary Industry and Fisheries in Tasmania collected in 1994. The data set is accessed and downloaded from [Dua, D. and Graff, C. (2019). UCI Machine Learning Repository.](https://archive.ics.uci.edu/ml/datasets/abalone)]
+
+.font100.brand-yellow[**How was the data collected?**]
+
+.font80[The data set was initially used to predict the .content-box-red[Age] of abalone from physical measurements. Age of the abalone is determined by cutting open the shell, and staining it to count the number of rings under microscope. (very time-consuming and tedious) While other variables such as .content-box-red[Shell weight] and .content-box-red[Diameter] so on can be measured easily.]
+
+.font80.pull-left[
+```{r}
+abalone$age = abalone$rings + 1.5
+```
+]
+.font80.pull-right.scroll-box-12[
+```{r}
+head(abalone)
+```
+]
+
+.footnote[
+**Abalone** includes a family of sea snails with a mollousc interior and an exterior shell that becomes pearlescent. It is a delicacy and has a great commerical demand in Asia
+]
+---
+## Variables
+.font100[
+.content-box-blue[Variable name | Data Type | Measurement Unit | Description]
+
+.content-box-red[Sex] is a nominal variable, with 3 measurements M (Male), F(Female), and I (infant).
+
+.content-box-red[Length] is continuous measuring the longest shell in millilitres.
+
+.content-box-red[Diameter] is continuous measurement perpendicular to length in millilitres.
+
+.content-box-red[Height] of the abalone with meat in shell in millilitres and continuous.
+
+.content-box-red[Whole weight] measures the whole abalone in grams. (continuous)
+
+.content-box-red[Shucked weight] is the weight of abalone meat in grams.
+
+.content-box-red[Viscera weight] is the gut weight of abalone (after bleeding) in grams.
+
+.content-box-red[Shell weight] is the abalone after being dried in grams.
+
+.content-box-red[Rings] is an integer value (by count) and +1.5 gives the age of the abalone in years.
+]
+
+---
+background-image: url("https://i.guim.co.uk/img/media/f41ac4cda2d896567a1f45a252af00fefd69080d/1146_0_3423_3424/master/3423.jpg?width=1920&quality=85&auto=format&fit=max&s=f8015d4233de71fe83b73d703cfaca8b")
+background-position: 80% 60%
+background-size: 400px
+
+## Introduction
+
+.font90[
+- [The Regional Sea farming Development and Demonstration Project(1990)](http://www.fao.org/3/AB731E/AB731E01.htm) report that Abalones between the age of 4 to 8 years are the ideal commercial age to be consumed.
+]
+.font90.pull-left[
+.blockquote[
+### `r icon::fa("location-arrow")` Aim
+- Can the size of Abalone be used to to conveniently estimate their age?
+
+- Can a quick observation of the diameter allow for an accurate estimation of the age, and hence suitability for commercial use of an Abalone?
+
+-  Can other physical measurements, such as Whole weight, shucked weight, viscera weight and shell weight contribute to this estimation?
+]]
+
+
+---
+## Analysis
+.font130.brand-blue[**Part A: Variable selection**]
+.font70[
+```{r, include=FALSE}
+abalone$age = abalone$rings + 1.5
+```
+]
+
+.font90.pull-left[- To model age as a function built from potentially 9 explanatory variables, we must first consider the feasibility of these variables.
+  - .content-box-red[sex] is removed as it is not continuous but rather categorical.
+  - .content-box-red[rings] is similarly excluded as age is calculated from the formula age = rings + 1.5 as indicated in the UCI dataset source. This would deteriorate the predictive model.
+- A correlation matrix was also considered, suggesting potential **multicollinearity** which may result in further removal of variables.]
+```{r,include=FALSE}
+#Multiple regression: modelling age as a function from potentially 8 explanatory variables
+#We exclude rings as that is obviously and directly linearly related to age as age = rings + 1.5.
+#Including it would remove any relevance of other variables and their ability to model age.
+#Sex must be removed as well as it is a categorical variable rather than a continous
+
+nab= select (abalone,-c(sex, rings))
+
+cor_mat = cor(nab)
+melted_cor_mat = cor_mat %>%
+  data.frame() %>%
+  rownames_to_column(var = "var1") %>%
+  gather(key = "var2", value = "cor", -var1)
+
+ggplot(data = melted_cor_mat,
+       aes(x=var1, y=var2, fill=cor)) +
+  geom_tile() + theme_minimal(base_size = 10) +
+  scale_fill_gradient2(
+    low = "blue", high = "red", mid = "white",
+    midpoint = 0, limit = c(-1,1)) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+qtlcharts::iplotCorr(nab)
+
+```
+
+```{r, echo=FALSE}
+mydata.cor = cor(nab)
+corrplot::corrplot.mixed(mydata.cor, cl.ratio = 0.2, tl.cex= 0.7, cl.lim = c(0, 1))
+```
+
+
+---
+.font130.brand-blue[**Part B: Initial model**]
+
+
+.pull-left[
+- A **stepwise approach** was taken for the initial model
+- A full and null model are created
+- Followed by comparison of **forward and backward model selection** methods using AIC to optimise our model
+  - Both model selections resulted in the same model
+
+```{r plot-label2, eval=FALSE}
+M0 = lm(age ~ 1, data = nab)  # Null model
+M1 = lm(age ~ ., data = nab)  # Full model
+sjPlot::tab_model(M1, digits = 4,
+                  show.ci = FALSE, show.aic = TRUE)
+```
+]
+
+.pull-right[
+```{r plot-label-out, ref.label="plot-label2", echo=FALSE}
+```
+]
+
+---
+
+.font130.brand-blue[**Part C: Assumptions**]
+
+.pull-left[
+.font70[The assumptions for multiple linear regression:
+.content-box-green[
+1. Independent errors
+2. Normally distributed residuals
+3. Linear relationship
+4. Homoscedasticity
+5. Multicollinearity]]
+
+.font70[
+1) The **error term** is independent as the residuals are uncorrelated and the data sampled randomly.
+
+2) **Normality** for the distributed residuals (QQPlot). The observations do not follow the diagonal line, especially on the tails. But generally fine since large sample size-central limit theorem.
+
+3) **Linearity**: it does not form a specific "bow" shape upwards/downwards, it is reasonable linear.
+
+4) **Homoscedasticity** is violated here. As the spread of residuals systematically "fans out" (and increases in degree) as fitted values increase,inconsistent spread.
+
+.content-box-grey[Therefore, we consider transforming the data.]]
+
+]
+
+.font70.pull-right[
+```{r}
+autoplot(M1, which = 1:2) + theme_bw()
+```
+]
+
+
+---
+## Transformation
+
+.font85[**Box-cox(log), square root and reciprocal** transformation considered:
+]
+.font80.scroll-box-16[
+```{r}
+ageBC = caret::BoxCoxTrans(nab$age, nab$diameter + nab$height+ nab$shweight + nab$skweight)
+print(ageBC)
+
+nab1 <- cbind(nab, bage=predict(ageBC, nab$age))
+nab1$s_age = sqrt(nab$age)
+nab1$i_age = 1/(nab$age)
+
+bmodel = lm(formula = bage ~ height + shweight + skweight + diameter, data = nab1)
+smodel = lm(formula = s_age ~ height + shweight + skweight + diameter, data = nab1)
+imodel = lm(formula = i_age ~ height + shweight + skweight + diameter, data = nab1)
+#head(nab1)
+#head(nab)
+
+#autoplot(model3, which = 1) + theme_bw()
+autoplot(bmodel, which = 1) + theme_bw()
+autoplot(smodel, which = 1) + theme_bw()
+autoplot(imodel, which = 1) + theme_bw()
+```
+]
+
+.font80[
+- The inverse and square-root transformations do not improve homoscedasticity, and instead creates issues with linearity within the model.
+
+- Even with the box-cox transformation, we see a decreases in heteroscedasticity but linearity is not satisfied.
+
+
+As our overall aim is to predict the age of commercially viable abalone (around 4-8yrs), heteroscedasticity will not overly influence our predictions as that represents the lower end of the available age range where our model remains accurate.
+Complex transformations decreases the interpretation of our results, hence, the original age variable is **preserved without any transformation.**
+]
+
+---
+
+## Multicolinearlity
+
+.font90[.content-box-red[allweight], .content-box-red[skweight] and .content-box-red[shweight] will all vary similarly as the abalone grows(from the correlation matrix)
+- All correlations are > 0.8. A further evaluation involved assessing the VIF (Variance Inflation Factor) of the model.]
+
+.font30.pull-left[
+```{r}
+qtlcharts::iplotCorr(nab, digits = 3)
+```
+]
+.font80.scroll-box-16[
+```{r, message=FALSE, warning=FALSE}
+initialmodel= lm(formula = age ~ ., data = nab)
+car::vif(initialmodel)
+```
+- There is an extremely large .content-box-red[allweight] VIF, and we will thus exclude the .content-box-red[allweight] variable and test if there are substantial alterations to the model's performance]
+
+
+---
+.font130.brand-blue[**Part D: Model optimisation** ]
+
+.font80[Split the data into training (90%) & test(10%) subsets.]
+
+.font70[
+```{r}
+set.seed(123)
+training.samples <- nab$age %>%
+  createDataPartition(p = 0.9, list = FALSE)
+train.data  <- nab[training.samples, ]
+test.data <- nab[-training.samples, ]
+```
+]
+
+.font80.pull-left.scroll-box-14[
+**Out-of-sample predictions**
+```{r}
+model1 <- lm(age ~., data = train.data)
+predict1 <- model1 %>% predict(test.data)
+model2 = update(model1, .~. -allweight)
+predict2 <- model2 %>% predict(test.data)
+
+data.frame( model = c("full model", "amended model"),
+  RMSE = c(RMSE(predict1, test.data$age), RMSE(predict2, test.data$age)) ,
+  R2 = c(R2(predict1, test.data$age), R2(predict2, test.data$age))
+)
+```
+]
+.font80.pull-right.scroll-box-14[
+**In-sample prediction**
+```{r}
+data.frame( model = c("full model", "amended model"),
+            R2= c(summary(model1)$r.squared, summary(model2)$r.squared))
+
+```
+```{r,echo=FALSE}
+fullmod = lm(age ~., data = nab)
+amod = update(fullmod, .~. -allweight)
+sjPlot::tab_model(fullmod, amod, digits = 4, show.ci = FALSE, show.aic = TRUE)
+```
+
+]
+
+.font80[
+
+- Considering **Root Mean Square Error**  and $R^2$ for the full model & amended model,  overall there is a slight decrease in accuracy of prediction.
+
+
+<blockquote>Retain the amended model to better address colinearity.</blockquote>]
+
+---
+.font130.brand-blue[**Further optimisation: Forward/backward variable selection**]
+
+.pull-left[
+.font80.scroll-box-16[
+```{r,  message=FALSE, warning=FALSE}
+M1 = lm(age ~ ., data = nab)
+M2 = update(M1, . ~ . -allweight)
+summary(M2)
+```
+]
+
+.font80[
+From the summary table above, both length and vweight are individually insignificant at the 5% level of significance, we drop vweight first as it has the largest p-value at first instance.]
+]
+.pull-right.font70[
+Test if the coefficient of .content-box-red[vweight] is significant as follows:
+
+First we formally define the pre-existing model with population parameters:
+
+
+$age =β_0+β_1length+β_2diameter+β_3height+β_4skweight+β_5vweight$
+$+β_6shweight+ε$
+
+**Assumptions:**
+The residuals $ε_i$ are iid $N(0,σ^2)$ and there is a linear relationship between y and x.
+This has been considered and satisfied in discussion above.
+
+**Test statistic:**
+
+$T= \frac{\hat{β_5}}{SE(\hat{β_5})} ∼ t_{n-p}$ under $H_0$ where $p$ is the number of estimated coefficients (including the intercept) and $n$ is the sample size. This is also the degrees of freedom associated with the residual standard error in the R output (i.e. 4170).
+
+**Observed test statistic:** $t_0=\frac{0.03601}{1.0433}=0.345$
+
+**p-value:** $2P(t_4170≥|0.235|)=0.730$
+
+**Conclusion:**
+
+We do not reject $H_0$ at the 5% level of significance as the p-value is greater than 0.05. Hence, there is no evidence to suggest that there is a significant linear relationship between age and vweight and it can be dropped from the model.]
+
+---
+
+Similarly for .content-box-red[length] variable:
+.scroll-box-14[
+```{r}
+M3 = update(M2, . ~ . -vweight)
+summary(M3)
+```
+]
+
+**Conclusion:**
+As the p-value is greater than 0.05, $H_0$ is retained  at the 5% level of significance. Hence, length is dropped from the model as well.
+We confirm our conclusions with forward and backward searches using AIC, which both selected an identical model that removed "length" and "vweight" as insignificant predictors for the age of abalone to optimise the model.
+---
+.font130.brand-blue[**Part D: Evaluating proposed model**]
+
+.pull-left.font70[
+Current proposed model is as follows:
+```{r}
+M4 = update(M3, . ~ . -length)
+summary(M4)
+```
+
+
+```{r, include=FALSE}
+new_nab= select (nab,-c(age, length, vweight, allweight))
+new_nab1= select (nab,-age)
+test_obs = new_nab[c(1015:1025),]
+test_obs1 = new_nab1[c(1015:1025),]
+d1= predict(M4, test_obs, interval = "prediction", level = 0.90)
+d2 = predict(M4, test_obs, interval = "confidence", level = 0.90)
+per = data.frame(d1, d2, nab[c(1015:1025),]$age)
+summary(per)
+perf = select (as_tibble(per) %>%
+  rename(
+    predicted_age = fit,
+    actual_age = nab.c.1015.1025.....age,
+    lwr_prediction = lwr,
+    upr_prediction = upr,
+    lwr_confidence = lwr.1,
+    upr_confidence = upr.1
+    ) , -fit.1)
+performance = perf[c(1, 6, 2, 3, 4, 5)]
+performance
+
+```
+More specifically, 
+$age =β_0+β_2diameter+β_3height+β_4skweight+β_6shweight+ε$]
+
+.pull-right.font70[
+Now let's evaluate it more comprehensively.
+
+We took 10 datapoints from original data to visualise how accurate our prediction is
+```{r, echo=FALSE}
+sjPlot::tab_model(M1, M2, M4, digits = 4, show.ci = FALSE)
+```
+Appears accurate until age enters extremities (ie beyond 12)
+]
+---
+
+## Conclusion
+
+
+.font80[
+Therefore, our **final model** is:
+
+$${age = 4.19 + 12.02 × diameter + 12.21 × height - 11.59 × shucked weight + 20.09 × shell weight + ε}$$
+]
+
+.font80.content-box-green[
+On average, holding the other variables constant, a 1 cm increase in diameter leads to a 12.02 unit increase in age of abalone.
+
+On average, holding the other variables constant, a 1 cm increase in height leads to a 12.21 unit increase in age of abalone.
+
+On average, holding the other variables constant, a 100 gram increase in shucked weight and shell weight combined leads to a 8.5 unit increase in age of abalone.
+]
+
+.font80.content-box-yellow[
+With the predicted model, we can estimate the age of abalone with easily measurable variables such as weight and diameter. This eliminates the arduous process of cutting open the shell and count the rings using a microscope to ascertain age.
+
+We also note that diameter, height, shucked weight and shell weight are the significant variables that influence age. 
+]
+
+.font80.content-box-blue[
+Our final model had an adjusted R-squared of **0.509**, meaning that all predictor variables accounted for 50.9% of the total sum of squares in explained by the regression. Utilising the same train/test data split, we projected a Root Mean Square Error of **2.5605** as the standardised mean of all variance between prediction and the actual abalone age. 
+]
+
+---
+background-image: url(https://png2.cleanpng.com/sh/b91aa3826b9c3c1fee58a5e34d7b63af/L0KzQYm3VsExN6d6iJH0aYP2gLBuTfFjaZ10htc2c3H2eLr0ib10eaZufJ98ZXGwc8bqlf1jbaMyeeU2ZnBydH76iPVtdJduRadrMXPpSYO6VBQyOmM7Rqk9MUW1RYK8UcUzQGc3TaY9M0W0QoS1kP5o/kisspng-abalone-sashimi-squid-sea-cucumber-as-food-shellfi-5b1cf9237d1226.7415251515286254435123.png)
+background-size: 100px
+background-position: 50% 90%
+
+
+.font120.brand-blue[**Limitations**]
+
+.font80[
+It is important to acknowledge potential limitations in this project:
+
+- *Multicolinearity* in our model was somewhat addressed by removing .content-box-red[allweight]; however, a restriction from removing too many variables were applied to ensure we had an accurate and meaningful predictions.
+
+This was a problem caused by the chosen variables of the dataset provided, which focused on features of the abalone that would naturally be highly correlated. A suggestion would be to include variables measuring environmental features. 
+
+- The model has *limitations with linearity*, but to impose a strict linear model would require to removal of too many variables, and create similar issue. 
+
+- Whilst *Heteroscedasticity* is somewhat present, as the spread of residuals increase with increasing age, predictions become unreliable at .content-box-red[age] >~12. However, applying transformations did not improve results marginally and increased issues with linearity. Thus, the original data was retained.
+
+Nonetheless at the lower end of .content-box-red[age], our model remains accurate as coinciding with our target range and inquiry question to predict the age of commerically viable abalone (around 4-8yrs).
+]
+
+---
+
+# References
+
+
+.font50[
+```{r, load_refs, include=FALSE, cache=FALSE}
+BibOptions(check.entries = FALSE, style = "markdown", hyperlink = TRUE, dashed = FALSE)
+myBib = ReadBib("references.bib", check = FALSE)
+```
+
+```{r refs, echo=FALSE, results="asis"}
+print(myBib)
+```
+
+
+[12] Dua, D. and Graff, C. (2019). UCI Machine Learning Repository [http://archive.ics.uci.edu/ml]. Irvine, CA: University of California, School of Information and Computer Science.
+
+[13] EduPristine. (2015, June). Detecting Multicollinearity. Retrieved from Empowering Professionals: https://www.edupristine.com/blog/detecting-multicollinearity
+
+[14] Kassambara, A. (2018, 03). Multicollinearity Essentials and VIF in R. Retrieved from Statistical tools for high-throughput data analysis: http://www.sthda.com/english/articles/39-regression-model-diagnostics/160-multicollinearity-essentials-and-vif-in-r/
+
+[15] Mean Absolute Error (MAE) and Root Mean Squared Error (RMSE). (n.d.). Retrieved from http://www.eumetrain.org/data/4/451/english/msg/ver_cont_var/uos3/uos3_ko1.htm
+
+[16] Prabhakaran, S. (2017). How to detect heteroscedasticity and rectify it? Retrieved from Regression Models in R: https://datascienceplus.com/how-to-detect-heteroscedasticity-and-rectify-it/
+
+[17] Project, R. S. (1990, September). DPR, Training Manual on Artificial Breeding of Abalone (Haliotis discus hannai) in Korea. Retrieved from http://www.fao.org/3/AB731E/AB731E01.htm
+
+[18] Yobero, C. (2016, June). Methods for Detecting and Resolving Heteroskedasticity. Retrieved from https://rstudio-pubs-static.s3.amazonaws.com/187387_3ca34c107405427db0e0f01252b3fbdb.html
+
+]
+
+
+----
