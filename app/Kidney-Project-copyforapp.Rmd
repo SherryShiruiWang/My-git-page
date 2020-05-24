@@ -1,0 +1,886 @@
+---
+title: "Kidney Project"
+author: "Lina, Sherry, Sarah, Demitri, John"
+date: "01/05/2020"
+output: html_document
+---
+```{r knitr_options , include=FALSE}
+knitr::opts_chunk$set(fig.width=12, fig.height=4,
+fig.path='Figs/', warning=FALSE,
+message=FALSE, include=FALSE,
+echo=FALSE)
+set.seed(53079239)
+```
+
+
+
+```{r}
+library(BiocManager)
+library(affy)
+library(GEOquery)
+library(tidyverse)
+library(limma)
+library(GiANT)
+#help(GiANT)
+#library(tictoc)
+```
+# ***To do***:
+
+* Deal with microarray multiple probes for one gene. e.g. there are two rows named ERICH5. We can do this before *renaming the data using annotations* or after *renaming the data using annotations*.
+
+https://www.biostars.org/ provides quite a few solutions to this common issue:
+
+  + https://www.biostars.org/p/47421/
+
+  + https://www.biostars.org/p/74687/
+
+  + https://www.biostars.org/p/336130/
+
+  + https://www.biostars.org/p/74687/
+
+  + https://www.biostars.org/p/396235/
+
+* Subset the Kidney transplant data by the top 50 highly differential common genes (used for identifying Type 2 diabetes) after handling the multiple probes for one gene.
+
+* Run the Random Forest Classifier (best accuracy) for identifying Type 2 diabetes on the Kidney transplant data. Label the samples with predicted outcomes.
+
+* Subset the Kidney transplant samples with predicted Type 2 diabetes. 
+
+* Building the risk calculator using the new data. 
+
+  + Find the highly differential genes e.g. top 50.
+  + Build the classifiers.
+  + Estimate accuracy and other matrix.
+
+* Shiny App
+
+# Load in data
+```{r Load in data}
+# takes time
+transplant_data <- ReadAffy(celfile.path="GSE14346_RAW")
+diabetes_data <- ReadAffy(celfile.path="GSE20966_RAW")
+
+library(GEOquery)
+clinical_outcome <-getGEO("GSE120396")
+clinical_outcome<- clinical_outcome$GSE120396_series_matrix.txt.gz
+
+print(clinical_outcome$characteristics_ch1.1[1:10])
+rejection_status  <- clinical_outcome$characteristics_ch1.1
+rejection_status <- unlist(lapply( strsplit(as.character(rejection_status), ": " ) , `[[` , 2)  )
+table(rejection_status)
+```
+
+```{r}
+library(GEOquery)
+clinical_outcome <-getGEO("GSE142677")
+clinical_outcome<- clinical_outcome$GSE142667_series_matrix.txt.gz
+str(clinical_outcome)
+
+print(clinical_outcome$characteristics_ch1.1[1:10])
+rejection_status  <- clinical_outcome$characteristics_ch1.1
+rejection_status <- unlist(lapply( strsplit(as.character(rejection_status), ": " ) , `[[` , 2)  )
+table(rejection_status)
+```
+
+# Obtain clinical outcome
+```{r Obtain clinical outcome - diabetes}
+# diabetes
+diabetes_clinical_outcome <- getGEO("GSE20966", GSEMatrix =TRUE, getGPL=FALSE)
+if (length(diabetes_clinical_outcome) > 1) idx <- grep("GSE20966", attr(diabetes_clinical_outcome, "names")) else idx <- 1
+diabetes_clinical_outcome <- diabetes_clinical_outcome[[idx]]
+```
+
+```{r reformat the labels - diabetes}
+# diabetes
+disease  <- diabetes_clinical_outcome$characteristics_ch1.1
+disease <- unlist(lapply( strsplit(as.character(disease), ": " ) , `[[` , 2)  )
+table(disease)
+```
+
+```{r Obtain clinical outcome - transplant}
+#transplant - takes a few seconds to run
+transplant_clinical_outcome <- getGEO("GSE14346", GSEMatrix =TRUE, getGPL=FALSE)
+if (length(transplant_clinical_outcome) > 1) idx <- grep("GSE14346", attr(transplant_clinical_outcome, "names")) else idx <- 1
+transplant_clinical_outcome <- transplant_clinical_outcome[[idx]]
+
+rejection <- transplant_clinical_outcome$`disease state:ch1`
+```
+
+```{r reformat the labels - transplant}
+rejection_labels <- ifelse(startsWith(rejection, 'STA'),rejection <-"STA",rejection <-"AR") 
+
+table(rejection_labels)
+```
+STA are stable patients and AR are patients with acute rejection.
+
+# Pre-processing
+```{r Obtaining scaled expression values - diabetes}
+eset_diabetes <- rma(diabetes_data)
+```
+```{r Obtaining scaled expression values - transplant}
+eset_transplant = rma(transplant_data)
+```
+# Data in table format
+```{r}
+diabetes = exprs(eset_diabetes)
+```
+
+```{r}
+transplant = exprs(eset_transplant)
+```
+# →To do: Handle multiple probes for one gene - we can do this before or after renaming the data using annotations
+
+# Rename the data using annotations
+#### Diabetes
+```{r diabetes data}
+library("annotate")
+annotation(diabetes_data)
+```
+```{r}
+#BiocManager::install("u133x3p.db")
+```
+
+```{r}
+library("u133x3p.db")
+diabetes_genenames <- as.character(rownames(diabetes))
+diabetes_sym_uncleaned <- getSYMBOL(diabetes_genenames, "u133x3p")
+```
+
+```{r}
+# remove NA
+diabetes_sym = na.omit(diabetes_sym_uncleaned)
+
+# filter data
+diabetes_filtered = diabetes[which(rownames(diabetes) %in% names(diabetes_sym)), ]
+
+# rename genes
+rownames(diabetes_filtered) <- diabetes_sym
+```
+
+#### Transplant
+```{r}
+library("annotate")
+annotation(transplant_data)
+```
+```{r}
+#BiocManager::install("hgu133plus2.db")
+```
+
+```{r}
+library("hgu133plus2.db")
+transplant_genenames <- as.character(rownames(transplant))
+transplant_sym_uncleaned <- getSYMBOL(transplant_genenames, "hgu133plus2")
+```
+
+```{r}
+# remove NA
+transplant_sym = na.omit(transplant_sym_uncleaned)
+
+# filter data
+transplant_filtered = transplant[which(rownames(transplant) %in% names(transplant_sym)), ]
+
+# rename genes
+rownames(transplant_filtered) <- transplant_sym
+```
+
+
+# Multiple probes for one gene
+
+https://rdrr.io/cran/GiANT/man/mergeProbesForGenes.html
+
+```{r}
+nrow(transplant_filtered)
+#unique(rownames(transplant_filtered))
+nrow(diabetes_filtered)
+```
+
+```{r}
+transplant_filtered2 <- mergeProbesForGenes(transplant_filtered, method = "max")
+diabetes_filtered2 <- mergeProbesForGenes(diabetes_filtered, method = "max")
+dim(transplant_filtered2)
+dim(diabetes_filtered2)
+
+```
+
+
+# Common genes
+```{r}
+common_genes = rownames(diabetes_filtered2)[rownames(diabetes_filtered2) %in% rownames(transplant_filtered2)]
+length(common_genes)
+```
+
+# Subset diabetes data - only keep common genes as transplant data
+```{r}
+diabetes_with_com_genes = diabetes_filtered2[which(rownames(diabetes_filtered2) %in% common_genes), ]
+dim(diabetes_with_com_genes)
+```
+
+
+# Subset transplant data - only keep common genes as diabetes data
+```{r}
+transplant_with_com_genes = transplant_filtered2[which(rownames(transplant_filtered2) %in% common_genes), ]
+dim(transplant_with_com_genes)
+```
+
+
+
+# Highly differential genes - Type 2 diabetes
+```{r set-up}
+# encode yes and no to 1 and 0 
+disease_encode <- ifelse(disease == "non-diabetic control", 0, 1 )
+# set group names
+groupname <- paste("G", disease_encode, sep="")    
+
+design <- model.matrix(~ groupname + 0)
+```
+
+```{r limma}
+fit <- lmFit(diabetes_with_com_genes, design)
+cont.matrix <- makeContrasts(groupnameG0-groupnameG1, levels=design)
+fit2 <- contrasts.fit(fit, cont.matrix)
+fit2 <- eBayes(fit2)
+
+table(fit2$p.value <= 0.01) # number of insignificant and significant genes
+```
+
+# Subset the data by the significant genes
+This could improve accuracy of classifiers. We can select the top 50, 150, 250 etc. 
+
+```{r top 30 genes}
+tt_top10 <- topTable(fit2,n = 10)
+
+genecode_top10 <- as.character(rownames(tt_top10)) # top 50 genes by gene code
+
+#genenames_top50 <- as.character(tt_top50$Id)# top 50 genes by gene names
+
+#gse_8f = gse[which(rownames(gse) %in% genenames_top8), ]
+#table(rownames(diabetes_with_com_genes) %in% genecode_top50)
+
+
+diabetes_top10_genes = diabetes_with_com_genes[which(rownames(diabetes_with_com_genes) %in% genecode_top10), ]
+dim(diabetes_top10_genes)
+```
+
+```{r top 50 genes}
+tt_top50 <- topTable(fit2,n = 50)
+
+genecode_top50 <- as.character(rownames(tt_top50)) # top 50 genes by gene code
+
+#genenames_top50 <- as.character(tt_top50$Id)# top 50 genes by gene names
+
+#gse_8f = gse[which(rownames(gse) %in% genenames_top8), ]
+#table(rownames(diabetes_with_com_genes) %in% genecode_top50)
+
+
+diabetes_top50_genes = diabetes_with_com_genes[which(rownames(diabetes_with_com_genes) %in% genecode_top50), ]
+dim(diabetes_top50_genes)
+```
+
+```{r top 150 genes}
+tt_top150 <- topTable(fit2,n = 150)
+
+genecode_top150 <- as.character(rownames(tt_top150)) # top 150 genes by gene code
+
+#genenames_top150 <- as.character(tt_top150$ID)# top 150 genes by gene names
+
+diabetes_top150_genes = diabetes_with_com_genes[which(rownames(diabetes_with_com_genes) %in% genecode_top150), ]
+dim(diabetes_top150_genes)
+```
+
+```{r top 250 genes}
+tt_top250 <- topTable(fit2,n = 250)
+
+genecode_top250 <- as.character(rownames(tt_top250)) # top 250 genes by gene code
+
+#genenames_top250 <- as.character(tt_top250$ID)# top 250 genes by gene names
+
+diabetes_top250_genes = diabetes_with_com_genes[which(rownames(diabetes_with_com_genes) %in% genecode_top250), ]
+dim(diabetes_top250_genes)
+```
+
+
+# Type 2 Diabetes Classifier 
+### On diabetes_with_com_genes (need around 100 seconds to run.)
+Note: I didn't subset the data. The data used here contains both the significant and insignificant genes.
+```{r}
+## quick filter to reduce computational time
+largevar = apply(diabetes_with_com_genes, 1, var)
+ind = which(largevar > quantile(largevar, 0.9))
+
+X = as.matrix(t(diabetes_with_com_genes[ind,]))
+y = disease
+
+cvK = 5  # number of CV folds
+cv_50acc5_knn = cv_50acc5_svm = cv_50acc5_rf = c()
+cv_acc_knn = cv_acc_svm = cv_acc_rf = c()
+
+n_sim = 25 ## number of repeats
+for (i in 1:n_sim) {
+
+  cvSets = cvTools::cvFolds(nrow(X), cvK)  # permute all the data, into 5 folds
+  cv_acc_knn = cv_acc_svm = cv_acc_rf = c()
+  
+  for (j in 1:cvK) {
+    test_id = cvSets$subsets[cvSets$which == j]
+    X_test = X[test_id, ]
+    X_train = X[-test_id, ]
+    y_test = y[test_id]
+    y_train = y[-test_id]
+    
+    ## KNN
+    fit5 = class::knn(train = X_train, test = X_test, cl = y_train, k = 5)
+    cv_acc_knn[j] = table(fit5, y_test) %>% diag %>% sum %>% `/`(length(y_test))
+    
+    ## SVM
+    svm_res <- e1071::svm(x = X_train, y = as.factor(y_train))
+    fit <- predict(svm_res, X_test)
+    cv_acc_svm[j] = table(fit, y_test) %>% diag %>% sum %>% `/`(length(y_test))
+
+    ## RandomForest
+    rf_res <- randomForest::randomForest(x = X_train, y = as.factor(y_train))
+    fit <- predict(rf_res, X_test)
+    cv_acc_rf[j] = table(fit, y_test) %>% diag %>% sum %>% `/`(length(y_test))
+  }
+  cv_50acc5_knn <- append(cv_50acc5_knn, mean(cv_acc_knn))
+  cv_50acc5_svm <- append(cv_50acc5_svm, mean(cv_acc_svm))
+  cv_50acc5_rf <- append(cv_50acc5_rf, mean(cv_acc_rf))
+} ## end for
+```
+
+```{r}
+boxplot(list(SVM = cv_50acc5_svm, KNN = cv_50acc5_knn , RF= cv_50acc5_rf), main = "CV Accuracy")
+```
+
+### On top 50 genes
+```{r}
+## quick filter to reduce computational time
+largevar = apply(diabetes_top50_genes, 1, var)
+ind = which(largevar > quantile(largevar, 0.9))
+
+X = as.matrix(t(diabetes_top50_genes[ind,]))
+y = disease
+
+cvK = 5  # number of CV folds
+cv_50acc5_knn = cv_50acc5_svm = cv_50acc5_rf = c()
+cv_acc_knn = cv_acc_svm = cv_acc_rf = c()
+
+n_sim = 25 ## number of repeats
+for (i in 1:n_sim) {
+
+  cvSets = cvTools::cvFolds(nrow(X), cvK)  # permute all the data, into 5 folds
+  cv_acc_knn = cv_acc_svm = cv_acc_rf = c()
+  
+  for (j in 1:cvK) {
+    test_id = cvSets$subsets[cvSets$which == j]
+    X_test = X[test_id, ]
+    X_train = X[-test_id, ]
+    y_test = y[test_id]
+    y_train = y[-test_id]
+    
+    ## KNN
+    fit5 = class::knn(train = X_train, test = X_test, cl = y_train, k = 5)
+    cv_acc_knn[j] = table(fit5, y_test) %>% diag %>% sum %>% `/`(length(y_test))
+    
+    ## SVM
+    svm_res <- e1071::svm(x = X_train, y = as.factor(y_train))
+    fit <- predict(svm_res, X_test)
+    cv_acc_svm[j] = table(fit, y_test) %>% diag %>% sum %>% `/`(length(y_test))
+
+    ## RandomForest
+    rf_res <- randomForest::randomForest(x = X_train, y = as.factor(y_train))
+    fit <- predict(rf_res, X_test)
+    cv_acc_rf[j] = table(fit, y_test) %>% diag %>% sum %>% `/`(length(y_test))
+  }
+  cv_50acc5_knn <- append(cv_50acc5_knn, mean(cv_acc_knn))
+  cv_50acc5_svm <- append(cv_50acc5_svm, mean(cv_acc_svm))
+  cv_50acc5_rf <- append(cv_50acc5_rf, mean(cv_acc_rf))
+} ## end for
+```
+
+```{r}
+boxplot(list(SVM = cv_50acc5_svm, KNN = cv_50acc5_knn , RF= cv_50acc5_rf), main = "Top 50 genes - CV Accuracy")
+```
+
+### On top 150 genes
+```{r}
+## quick filter to reduce computational time
+largevar = apply(diabetes_top150_genes, 1, var)
+ind = which(largevar > quantile(largevar, 0.9))
+
+X = as.matrix(t(diabetes_top150_genes[ind,]))
+y = disease
+
+cvK = 5  # number of CV folds
+cv_50acc5_knn = cv_50acc5_svm = cv_50acc5_rf = c()
+cv_acc_knn = cv_acc_svm = cv_acc_rf = c()
+
+n_sim = 25 ## number of repeats
+for (i in 1:n_sim) {
+
+  cvSets = cvTools::cvFolds(nrow(X), cvK)  # permute all the data, into 5 folds
+  cv_acc_knn = cv_acc_svm = cv_acc_rf = c()
+  
+  for (j in 1:cvK) {
+    test_id = cvSets$subsets[cvSets$which == j]
+    X_test = X[test_id, ]
+    X_train = X[-test_id, ]
+    y_test = y[test_id]
+    y_train = y[-test_id]
+    
+    ## KNN
+    fit5 = class::knn(train = X_train, test = X_test, cl = y_train, k = 5)
+    cv_acc_knn[j] = table(fit5, y_test) %>% diag %>% sum %>% `/`(length(y_test))
+    
+    ## SVM
+    svm_res <- e1071::svm(x = X_train, y = as.factor(y_train))
+    fit <- predict(svm_res, X_test)
+    cv_acc_svm[j] = table(fit, y_test) %>% diag %>% sum %>% `/`(length(y_test))
+
+    ## RandomForest
+    rf_res <- randomForest::randomForest(x = X_train, y = as.factor(y_train))
+    fit <- predict(rf_res, X_test)
+    cv_acc_rf[j] = table(fit, y_test) %>% diag %>% sum %>% `/`(length(y_test))
+  }
+  cv_50acc5_knn <- append(cv_50acc5_knn, mean(cv_acc_knn))
+  cv_50acc5_svm <- append(cv_50acc5_svm, mean(cv_acc_svm))
+  cv_50acc5_rf <- append(cv_50acc5_rf, mean(cv_acc_rf))
+} ## end for
+```
+
+```{r}
+boxplot(list(SVM = cv_50acc5_svm, KNN = cv_50acc5_knn , RF= cv_50acc5_rf), main = "Top 150 genes - CV Accuracy")
+```
+
+### On top 250 genes
+```{r}
+## quick filter to reduce computational time
+largevar = apply(diabetes_top250_genes, 1, var)
+ind = which(largevar > quantile(largevar, 0.9))
+
+X = as.matrix(t(diabetes_top250_genes[ind,]))
+y = disease
+
+cvK = 5  # number of CV folds
+cv_50acc5_knn = cv_50acc5_svm = cv_50acc5_rf = c()
+cv_acc_knn = cv_acc_svm = cv_acc_rf = c()
+
+n_sim = 25 ## number of repeats
+for (i in 1:n_sim) {
+
+  cvSets = cvTools::cvFolds(nrow(X), cvK)  # permute all the data, into 5 folds
+  cv_acc_knn = cv_acc_svm = cv_acc_rf = c()
+  
+  for (j in 1:cvK) {
+    test_id = cvSets$subsets[cvSets$which == j]
+    X_test = X[test_id, ]
+    X_train = X[-test_id, ]
+    y_test = y[test_id]
+    y_train = y[-test_id]
+    
+    ## KNN
+    fit5 = class::knn(train = X_train, test = X_test, cl = y_train, k = 5)
+    cv_acc_knn[j] = table(fit5, y_test) %>% diag %>% sum %>% `/`(length(y_test))
+    
+    ## SVM
+    svm_res <- e1071::svm(x = X_train, y = as.factor(y_train))
+    fit <- predict(svm_res, X_test)
+    cv_acc_svm[j] = table(fit, y_test) %>% diag %>% sum %>% `/`(length(y_test))
+
+    ## RandomForest
+    rf_res <- randomForest::randomForest(x = X_train, y = as.factor(y_train))
+    fit <- predict(rf_res, X_test)
+    cv_acc_rf[j] = table(fit, y_test) %>% diag %>% sum %>% `/`(length(y_test))
+  }
+  cv_50acc5_knn <- append(cv_50acc5_knn, mean(cv_acc_knn))
+  cv_50acc5_svm <- append(cv_50acc5_svm, mean(cv_acc_svm))
+  cv_50acc5_rf <- append(cv_50acc5_rf, mean(cv_acc_rf))
+} ## end for
+```
+
+```{r}
+boxplot(list(SVM = cv_50acc5_svm, KNN = cv_50acc5_knn , RF= cv_50acc5_rf), main = "Top 250 genes - CV Accuracy")
+```
+
+# →To do: prepare data of top 10 genes for both diabetes and transplant data
+
+```{r}
+diabetes_top10_genes = diabetes_with_com_genes[which(rownames(diabetes_with_com_genes) %in% genecode_top10), ]
+dim(diabetes_top10_genes)
+transplant_top10_genes = transplant_with_com_genes[which(rownames(transplant_with_com_genes) %in% genecode_top10),]
+
+dim(transplant_top10_genes)
+```
+
+```{r}
+diabetes_top50_genes = diabetes_with_com_genes[which(rownames(diabetes_with_com_genes) %in% genecode_top50), ]
+dim(diabetes_top50_genes)
+transplant_top50_genes = transplant_with_com_genes[which(rownames(transplant_with_com_genes) %in% genecode_top50),]
+
+dim(transplant_top50_genes)
+```
+```{r}
+diabetes_top150_genes = diabetes_with_com_genes[which(rownames(diabetes_with_com_genes) %in% genecode_top150), ]
+dim(diabetes_top150_genes)
+transplant_top150_genes = transplant_with_com_genes[which(rownames(transplant_with_com_genes) %in% genecode_top150),]
+
+dim(transplant_top150_genes)
+```
+
+# →To do: Append predicted Type 2 Diabetes labels to the Kidney Transplant data samples
+
+Since classifier with top 50 genes has the highest accuracy, we choose this to classify the kidney transplant data(with or with our diabetes)
+
+```{r}
+#Need to renamethe classifiers or run this chunck first for the top 10 genes classifier
+
+## quick filter to reduce computational time
+#largevar = apply(diabetes_top50_genes, 1, var)
+#ind = which(largevar > quantile(largevar, 0.8))
+
+set.seed(0123456)
+X = as.matrix(t(diabetes_top10_genes))
+y = disease
+
+cvK = 3  # number of CV folds
+cv_50acc5_knn = cv_50acc5_svm = cv_50acc5_rf = c()
+cv_acc_knn = cv_acc_svm = cv_acc_rf = c()
+
+n_sim = 150 ## number of repeats
+for (i in 1:n_sim) {
+
+  cvSets = cvTools::cvFolds(nrow(X), cvK)  # permute all the data, into 5 folds
+  cv_acc_knn = cv_acc_svm = cv_acc_rf = c()
+  
+  for (j in 1:cvK) {
+    test_id = cvSets$subsets[cvSets$which == j]
+    X_test = X[test_id, ]
+    X_train = X[-test_id, ]
+    y_test = y[test_id]
+    y_train = y[-test_id]
+    
+    ## KNN
+    fit5 = class::knn(train = X_train, test = X_test, cl = y_train, k = 5)
+    cv_acc_knn[j] = table(fit5, y_test) %>% diag %>% sum %>% `/`(length(y_test))
+    
+    ## SVM
+    svm_res <- e1071::svm(x = X_train, y = as.factor(y_train))
+    fitsvm <- predict(svm_res, X_test)
+    cv_acc_svm[j] = table(fitsvm, y_test) %>% diag %>% sum %>% `/`(length(y_test))
+
+    ## RandomForest
+    rf_res <- randomForest::randomForest(x = X_train, y = as.factor(y_train))
+    fitrf <- predict(rf_res, X_test)
+    cv_acc_rf[j] = table(fitrf, y_test) %>% diag %>% sum %>% `/`(length(y_test))
+  }
+  cv_50acc5_knn <- append(cv_50acc5_knn, mean(cv_acc_knn))
+  cv_50acc5_svm <- append(cv_50acc5_svm, mean(cv_acc_svm))
+  cv_50acc5_rf <- append(cv_50acc5_rf, mean(cv_acc_rf))
+} ## end for
+```
+
+```{r}
+boxplot(list(SVM = cv_50acc5_svm, KNN = cv_50acc5_knn , RF= cv_50acc5_rf), main = "Top 10 genes - CV Accuracy")
+```
+
+```{r}
+X_train[1,]
+diabetes_top_10_genes
+var=rownames(diabetes_top_10_genes)
+transplant_top10_genes_var = transplant_with_com_genes[which(rownames(transplant_with_com_genes) %in% var),]
+#saveRDS(transplant_top10_genes_var, "transplant_top10_genes.rds")
+dim(X)
+dim(transplant_top10_genes_var)
+```
+
+```{r}
+#convert into correct format 
+test<-as.matrix(t(transplant_top10_genes))
+dim(test)
+```
+
+
+```{r}
+#predict transplant data using rf method
+#write.csv(test[1,],"diabetes_input1")
+di=read.csv("diabetes_input1")
+
+
+t=t(as.matrix(di))[2,]
+
+list<-c(1,2,3,1,1,1,1,1,1,1)
+new=t(as.matrix(list))
+
+p=predict(rf_res, t) 
+pp <- ifelse(p == "non-diabetic control", "No diabetes", "Yes diabetes" )
+
+
+print(pp)
+```
+
+```{r}
+#predict transplant data using svm method
+
+p_svm<-predict(svm_res,newdata = test)
+table(ifelse(p_svm == "non-diabetic control", "No diabetes", "Yes diabetes" ))
+
+```
+
+
+
+
+# →To do: Subset the Kidney transplant samples with predicted Type 2 diabetes
+Note we are using the prediction from RF method (with top 10 selected features)
+
+```{r}
+#rename the colnames with the prediction from our classifier (easy identification of diabetes or not)
+colnames(transplant_with_com_genes)= pp
+#head(transplant_with_com_genes)
+dim(transplant_with_com_genes)
+```
+
+```{r}
+#filter transplant data - only keeping the patients with diabetes
+t_transplant_with_com_genes=t(transplant_with_com_genes)
+transplant_filter_diabetes = t_transplant_with_com_genes[which(rownames(t_transplant_with_com_genes) =="Yes diabetes"),]
+
+transplant_filter_diabetes=t(transplant_filter_diabetes)
+dim(transplant_filter_diabetes)
+#-starts_with("Petal")
+```
+
+#  →To do: Highly differential genes - Rejection vs non-rejection
+
+```{r }
+
+# encode yes and no to 1 and 0 
+rejection_encode <- ifelse(rejection_labels == "STA", 0, 1 )
+TF=rownames(t_transplant_with_com_genes) =="Yes diabetes"
+
+rejection_encode_filtered=rejection_encode[TF==TRUE]
+
+#filter rejection labels only for those that are predicted diabetes
+
+# set group names
+groupname <- paste("G", rejection_encode_filtered, sep="")    
+
+design <- model.matrix(~ groupname + 0)
+table(rejection_encode_filtered)
+```
+
+```{r}
+fit_transplant <- lmFit(transplant_filter_diabetes, design)
+cont.matrix <- makeContrasts(groupnameG0-groupnameG1, levels=design)
+fit_transplant2 <- contrasts.fit(fit_transplant, cont.matrix)
+fit_transplant2 <- eBayes(fit_transplant2)
+#help(eBayes)
+tT <- topTable(fit_transplant2,number =50)
+table(fit_transplant2$p.value <= 0.0005) 
+```
+
+
+
+# →To do: Subset the transplant data by highly differential genes - Rejection vs non-rejection
+
+
+selecting top 50 genes, we can test different numbers too.
+
+```{r top 10 genes}
+tT <- topTable(fit_transplant2,n = 10)
+
+transplant_genecode_top10 <- as.character(rownames(tT)) # top 50 genes by gene code
+
+#transplant_genenames_top10 <- as.character(tT$ID)# top 50 genes by gene names
+
+transplant_10_genes = transplant_filter_diabetes[which(rownames(transplant_filter_diabetes) %in% transplant_genecode_top10), ]
+
+dim(transplant_10_genes)
+unique(rownames(transplant_10_genes))
+# note the multiple probes with same genes here... but i'll continue for now
+```
+
+
+
+
+# →To do: Classifier - Rejection vs. non-rejection 
+
+For now simply a draft of predicting rejection and non-rejection. note that we dont have any samples with diabetes
+
+
+```{r}
+
+## quick filter to reduce computational time
+
+#largevar = apply(gse, 1, var)
+#ind = which(largevar > quantile(largevar, 0.9))
+set.seed(0123456)
+#library(glmnet)
+X = as.matrix(t(transplant_10_genes))
+y = rejection_encode_filtered
+
+cvK = 5  # number of CV folds
+cv_50acc5_knn = cv_50acc5_svm = cv_50acc5_rf =cv_50eval_cox = c()
+cv_acc_knn = cv_acc_svm = cv_acc_rf =cv_acc_lasso= c()
+
+n_sim = 25 ## number of repeats
+for (i in 1:n_sim) {
+
+  cvSets = cvTools::cvFolds(nrow(X), cvK)  # permute all the data, into 5 folds
+  cv_acc_knn = cv_acc_svm = cv_acc_rf = c()
+  
+  for (j in 1:cvK) {
+    test_id = cvSets$subsets[cvSets$which == j]
+    X_test = X[test_id, ]
+    X_train = X[-test_id, ]
+    y_test = y[test_id]
+    y_train = y[-test_id]
+    
+    ## KNN
+    fit5 = class::knn(train = X_train, test = X_test, cl = y_train, k = 5)
+    cv_acc_knn[j] = table(fit5, y_test) %>% diag %>% sum %>% `/`(length(y_test))
+    
+    ## SVM
+    svm_res <- e1071::svm(x = X_train, y = as.factor(y_train))
+    fit <- predict(svm_res, X_test)
+    cv_acc_svm[j] = table(fit, y_test) %>% diag %>% sum %>% `/`(length(y_test))
+
+    ## RandomForest
+    rf_res <- randomForest::randomForest(x = X_train, y = as.factor(y_train))
+    fit <- predict(rf_res, X_test)
+    cv_acc_rf[j] = table(fit, y_test) %>% diag %>% sum %>% `/`(length(y_test))
+    
+    
+  }
+  cv_50acc5_knn <- append(cv_50acc5_knn, mean(cv_acc_knn))
+  cv_50acc5_svm <- append(cv_50acc5_svm, mean(cv_acc_svm))
+  cv_50acc5_rf <- append(cv_50acc5_rf, mean(cv_acc_rf))
+  
+} ## end for
+
+
+```
+```{r}
+B1=boxplot(list(SVM = cv_50acc5_svm, KNN = cv_50acc5_knn , RF= cv_50acc5_rf))
+
+```
+
+Note that we will need to calculate the overall accuracy (for the 2 level classification)
+
+
+Graphics to include in shiny app
+
+How many diabetes patients get rejection and where you are- stacked bar graph
+Ask fro female or male
+The bar graph can have female and male output
+
+```{r}
+#number of patients (predicted with) diabetes that have rejection / no rejections 
+t=as.data.frame(as.matrix(table(rejection_encode_filtered)))
+
+d=as.matrix(t)
+#d %>% mutate(status=rejection)
+data=as.data.frame(d)
+
+data$rejection_status=ifelse(rownames(data)=="0","no rejection","rejection")
+
+
+
+bp<-ggplot(data, aes(fill=rejection_status,y=V1,x="")) + geom_bar(width =1, stat="identity") +ggtitle("Rejection status for patients predicted with Type 2 Diabetes")+ labs(y = "Percentage",x="Diabetes patients(predicted)")+geom_text(aes(label = paste(round(V1 / sum(V1) * 100, 1), "%")),
+            position = position_stack(vjust = 0.5))+
+  theme_classic() +
+  theme(plot.title = element_text(hjust=0.5),
+        axis.line = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank()) 
+bp
+```
+
+```{r}
+#create theme
+blank_theme <- theme_minimal()+
+  theme(
+  axis.title.x = element_blank(),
+  axis.title.y = element_blank(),
+  panel.border = element_blank(),
+  panel.grid=element_blank(),
+  axis.ticks = element_blank(),
+  plot.title=element_text(size=14, face="bold")
+  )
+```
+
+```{r}
+library(ggrepel)
+pie <- bp + coord_polar("y", start=0) + scale_fill_brewer(palette="Dark2")+ blank_theme +
+  theme(axis.text.x=element_blank()) +labs(fill = "Rejection Status")
+#+geom_label_repel(aes(label = status), size=5, show.legend = F, nudge_x = 1)
+pie
+```
+
+
+```{r}
+#p=predict(svm_res, test) 
+#pp <- ifelse(p == "non-diabetic control", "No diabetes", "Yes diabetes" )
+
+
+#table(pp)
+```
+
+```{r}
+diabetes_top_10_genes<-readRDS("diabetes_top10_genes.rds")
+rejection_encode_filtered<-read_rds("rejection_encode_filtered.rds")
+transplant_top10_genes<-readRDS("transplant_top10_genes.rds")
+disease<-readRDS("disease.rds")
+test<-readRDS("test.rds")
+```
+
+```{r}
+
+ 
+genemeans = t(apply(transplant_top10_genes[,-1], 1, mean))
+
+inputs=as.numeric(c(1,2,3,4,5,6,7,8,9,10))
+
+#ggplot(genemeans, aes( x=genemeans[,1],y = transplant_top10_genes$mean))
+#plot(genemeans, main="Genes comparison",xlab="genes ", ylab="Gene values ", pch=19)
+```
+
+
+```{r}
+genemeans = t(apply(transplant_top10_genes[,-1], 1, mean))
+df <- data.frame(gene_names = rownames(transplant_top10_genes),
+                 values = as.numeric(genemeans),
+                inputvalues=inputs )
+
+colors <- c("Other patients" = "cornflowerblue", "You"="red")
+library(ggpubr)
+ggplot(df, aes(x = gene_names))+ 
+  geom_point(aes(x = gene_names,y = values,color = "Other patients"),size = 1.5) +
+  geom_point(aes(x = gene_names,y = inputvalues,color = "You" , shape =17),size = 1.5)+
+  scale_shape_manual(values=c(3, 16, 17))+
+  scale_shape_identity()+
+  ggtitle("Gene comparisons")+
+  theme(plot.title = element_text(hjust = 0.5))+  
+  theme(
+    legend.position = c(0.95, 0.95),
+    legend.justification = c("right", "top"),
+    legend.title = element_text( size = 12)
+  )+ labs(color='Legend')  +xlab("Genes") + ylab("Values")
+
+
+
+```
+
+
+```{r}
+df
+```
+
+
+```{r}
+load("classifiers.RData")
+```
+
+
+```{r}
+Classifiers.RData
+```
+

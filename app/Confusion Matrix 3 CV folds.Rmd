@@ -1,0 +1,158 @@
+---
+title: "Confusion Matrix - 3 CV folds"
+author: '480216304'
+date: "23/05/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(shiny)
+library(shinydashboard)
+library(tidyverse)
+library(limma)
+
+diabetes_top_10_genes<-read_rds("diabetes_top10_genes.rds")
+rejection_encode_filtered<-readRDS("rejection_encode_filtered.rds")
+transplant_top10_genes<-readRDS("transplant_10_genes.rds")
+disease<-readRDS("disease.rds")
+
+X = as.matrix(t(diabetes_top_10_genes))
+y = disease
+X2 = as.matrix(t(transplant_top10_genes))
+y2 = rejection_encode_filtered
+```
+## Confusion matrix - Visualization
+```{r need citation}
+draw_confusion_matrix <- function(cmtrx,model_name) {
+
+total <- sum(cmtrx$table)
+res <- as.numeric(cmtrx$table)
+
+# Generate color gradients. Palettes come from RColorBrewer.
+greenPalette <- c("#F7FCF5","#E5F5E0","#C7E9C0","#A1D99B","#74C476","#41AB5D","#238B45","#006D2C","#00441B")
+redPalette <- c("#FFF5F0","#FEE0D2","#FCBBA1","#FC9272","#FB6A4A","#EF3B2C","#CB181D","#A50F15","#67000D")
+getColor <- function (greenOrRed = "green", amount = 0) {
+
+if (amount == 0)
+return("#FFFFFF")
+
+palette <- greenPalette
+if (greenOrRed == "red")
+palette <- redPalette
+colorRampPalette(palette)(100)[10 + ceiling(90 * amount / total)]
+}
+
+# set the basic layout
+layout(matrix(c(1,1,2)))
+par(mar=c(2,2,2,2))
+plot(c(100, 345), c(300, 450), type = "n", xlab="", ylab="", xaxt='n', yaxt='n')
+title(paste('CONFUSION MATRIX -', model_name), cex.main=2)
+
+# create the matrix
+
+classes = colnames(cmtrx$table)
+rect(150, 430, 240, 370, col=getColor("green", res[1])) # CM
+text(195, 435, classes[1], cex=1.2)
+rect(250, 430, 340, 370, col=getColor("red", res[3])) # CM
+text(295, 435, classes[2], cex=1.2)
+text(125, 370, 'Predicted', cex=1.3, srt=90, font=2)
+text(245, 450, 'Actual', cex=1.3, font=2)
+rect(150, 305, 240, 365, col=getColor("red", res[2])) # CM
+rect(250, 305, 340, 365, col=getColor("green", res[4])) # CM
+text(140, 400, classes[1], cex=1.2, srt=90)
+text(140, 335, classes[2], cex=1.2, srt=90)
+
+# add in the cmtrx results
+text(195, 400, res[1], cex=1.6, font=2, col='white')
+text(195, 335, res[2], cex=1.6, font=2, col='white')
+text(295, 400, res[3], cex=1.6, font=2, col='white')
+text(295, 335, res[4], cex=1.6, font=2, col='white')
+
+# add in the specifics
+
+plot(c(100, 0), c(100, 0), type = "n", xlab="", ylab="", main = "DETAILS", xaxt='n', yaxt='n')
+text(10, 85, names(cmtrx$byClass[1]), cex=1.2, font=2)
+text(10, 70, round(as.numeric(cmtrx$byClass[1]), 3), cex=1.2)
+text(30, 85, names(cmtrx$byClass[2]), cex=1.2, font=2)
+text(30, 70, round(as.numeric(cmtrx$byClass[2]), 3), cex=1.2)
+text(50, 85, names(cmtrx$byClass[5]), cex=1.2, font=2)
+text(50, 70, round(as.numeric(cmtrx$byClass[5]), 3), cex=1.2)
+text(70, 85, names(cmtrx$byClass[6]), cex=1.2, font=2)
+text(70, 70, round(as.numeric(cmtrx$byClass[6]), 3), cex=1.2)
+text(90, 85, names(cmtrx$byClass[7]), cex=1.2, font=2)
+text(90, 70, round(as.numeric(cmtrx$byClass[7]), 3), cex=1.2)
+
+# add in the accuracy information
+text(30, 35, names(cmtrx$overall[1]), cex=1.5, font=2)
+text(30, 20, round(as.numeric(cmtrx$overall[1]), 3), cex=1.4)
+text(70, 35, names(cmtrx$overall[2]), cex=1.5, font=2)
+text(70, 20, round(as.numeric(cmtrx$overall[2]), 3), cex=1.4)
+}
+```
+# Set folds - equal size
+```{r}
+set.seed(1)
+folds <- sample(rep(1:3, length.out = nrow(X)), size = nrow(X), replace = F)
+table(folds)
+```
+# SVM - 3 fold CV
+```{r}
+  CV_svm <- lapply(1:3, function(x){ 
+  model <- e1071::svm(x = X[folds != x,], y = as.factor(y[folds != x]))
+  preds <- predict(model,  X[folds == x,])
+  return(data.frame(preds, real = y[folds == x]))
+})
+
+CV_svm <- do.call(rbind, CV_svm)
+
+svm_cm <- caret::confusionMatrix(CV_svm$preds, CV_svm$real)
+
+draw_confusion_matrix(svm_cm, "SVM (Diabetes)")
+```
+# RF - 3 fold CV
+```{r}
+CV_rf <- lapply(1:3, function(x){ 
+  model <- randomForest::randomForest(x = X[folds != x,], y = as.factor(y[folds != x]))
+  preds <- predict(model,  X[folds == x,])
+  return(data.frame(preds, real = y[folds == x]))
+})
+
+CV_rf <- do.call(rbind, CV_rf)
+
+rf_cm <- caret::confusionMatrix(CV_rf$preds, CV_rf$real)
+
+draw_confusion_matrix(rf_cm, "Random forest - Diabetes")
+```
+
+# SVM
+```{r}
+  CV_svm <- lapply(1:3, function(x){ 
+  model <- e1071::svm(x = X2[folds != x,], y = as.factor(y2[folds != x]))
+  preds <- predict(model,  X2[folds == x,])
+  return(data.frame(preds, real = as.factor(y2[folds == x])))
+})
+
+CV_svm <- do.call(rbind, CV_svm)
+
+svm_cm <- caret::confusionMatrix(CV_svm$preds, CV_svm$real)
+
+draw_confusion_matrix(svm_cm, "SVM (Transplant)")
+```
+# RF
+```{r}
+CV_rf2 <- lapply(1:3, function(x){ 
+  model <- randomForest::randomForest(x = X2[folds != x,], y = as.factor(y2[folds != x]))
+  preds <- predict(model,  X2[folds == x,])
+  return(data.frame(preds, real = as.factor(y2[folds == x])))
+})
+
+CV_rf2 <- do.call(rbind, CV_rf2)
+
+rf_cm2 <- caret::confusionMatrix(CV_rf2$preds, CV_rf2$real)
+
+draw_confusion_matrix(rf_cm2, "Random forest - Transplant")
+```
