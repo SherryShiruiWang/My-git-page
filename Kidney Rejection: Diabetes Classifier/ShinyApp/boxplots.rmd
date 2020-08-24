@@ -1,0 +1,266 @@
+---
+title: "Model performance"
+author: '480216304'
+date: "23/05/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(limma)
+library(MLmetrics) # used to retrive scores from the confusion matrix
+
+diabetes_top_10_genes<-read_rds("diabetes_top10_genes.rds")
+rejection_encode_filtered<-readRDS("rejection_encode_filtered.rds")
+transplant_10_genes<-readRDS("transplant_10_genes.rds")
+disease<-readRDS("disease.rds")
+```
+
+
+
+```{r}
+X = as.matrix(t(diabetes_top_10_genes))
+y = disease
+
+cvK = 3  # number of CV folds
+cv_50acc5_rf = c()
+cv_acc_rf =c()
+
+cv_50fpr5_rf = c()
+cv_fpr_rf = c()
+
+cv_50fnr5_rf = c()
+cv_fnr_rf = c()
+
+cv_50f15_rf = c()
+cv_f1_rf = c()
+
+n_sim = 150 ## number of repeats
+for (i in 1:n_sim) {
+
+  cvSets = cvTools::cvFolds(nrow(X), cvK)  # permute all the data, into 5 folds
+  cv_acc_rf = c()
+  cv_fpr_rf = c()
+  cv_fnr_rf = c()
+  cv_f1_rf = c()
+  recal = c()
+  prec = c()
+  
+  for (j in 1:cvK) {
+    test_id = cvSets$subsets[cvSets$which == j]
+    X_test = X[test_id, ]
+    X_train = X[-test_id, ]
+    y_test = y[test_id]
+    y_train = y[-test_id]
+    
+    ## RandomForest
+    rf_res <- randomForest::randomForest(x = X_train, y = as.factor(y_train))
+    fit <- predict(rf_res, X_test)
+    cv_acc_rf[j] = table(fit, y_test) %>% diag %>% sum %>% `/`(length(y_test))
+    
+    matrix<-as.matrix(table(fit, y_test))
+   if (length(matrix)== 4 ){cv_fpr_rf[j]=matrix[1,2]/(matrix[1,2]+matrix[2,2])}
+   if (length(matrix)== 4 ){cv_fnr_rf[j]=matrix[2,1]/(matrix[2,1]+matrix[1,1])}
+   if (length(matrix)== 4 ){recal[j]=matrix[1,1]/(matrix[1,1]+matrix[2,1])}       
+   if (length(matrix)== 4 ){prec[j]=matrix[1,1]/(matrix[1,1]+matrix[1,2])} 
+  
+  cv_f1_rf[j]= (2*(recal[j]*prec[j])/(recal[j]+prec[j]))     
+      
+  }
+  
+  cv_50acc5_rf <- append(cv_50acc5_rf, mean(cv_acc_rf))
+  cv_50fpr5_rf <- append(cv_50fpr5_rf, mean(cv_fpr_rf))
+  cv_50fnr5_rf <- append(cv_50fnr5_rf, mean(cv_fpr_rf))
+  cv_50f15_rf <- append(cv_50f15_rf, mean(cv_f1_rf))
+  
+} ## end for
+
+c(mean(cv_acc_rf),mean(cv_f1_rf),mean(cv_fpr_rf),mean(cv_fpr_rf))
+
+```
+
+
+```{r}
+boxplot(list(ACC = cv_50acc5_rf, F1 =cv_50f15_rf,  FPR = cv_50fpr5_rf ,FNR = cv_50fnr5_rf), xlab = "Classifier", ylab = "Score", main = "Performance of the RF classifier (Type 2 diabetes)", sub="RF classifier (Type 2 diabetes): Performance scores of 3-fold 150 repeats Cross-Validation", cex.main=1.3, cex.lab=1.1, cex.axis=1, cex.sub = 0.8, col=c("chocolate1","chartreuse3","cyan3","darkgoldenrod1"), border=c ("chocolate4","chartreuse4","cyan4","darkgoldenrod4"))
+```
+# Transplant
+
+
+
+```{r}
+set.seed(0123456)
+transplant_10_genes = readRDS("transplant_10_genes.rds")
+
+X = as.matrix(t(transplant_10_genes))
+y = as.factor(readRDS("rejection_encode_filtered.rds"))
+
+cvK = 3  # number of CV folds
+cv_50acc5_svm = c()
+cv_acc_svm =c()
+
+cv_50fpr5_svm = c()
+cv_fpr_svm = c()
+
+cv_50fnr5_svm = c()
+cv_fnr_svm = c()
+
+cv_50f15_svm = c()
+cv_f1_svm = c()
+
+n_sim = 150 ## number of repeats
+for (i in 1:n_sim) {
+
+  cvSets = cvTools::cvFolds(nrow(X), cvK)  # permute all the data, into 5 folds
+
+  recal = c()
+  prec = c()
+  
+  for (j in 1:cvK) {
+    test_id = cvSets$subsets[cvSets$which == j]
+    X_test = X[test_id, ]
+    X_train = X[-test_id, ]
+    y_test = y[test_id]
+    y_train = y[-test_id]
+    
+    ## svm
+    svm_res <- e1071::svm(x = X_train, y = as.factor(y_train))
+    fit <- predict(svm_res, X_test)
+    cv_acc_svm[j] = table(fit, y_test) %>% diag %>% sum %>% `/`(length(y_test))
+    
+    matrix<-as.matrix(table(fit, y_test))
+   if (length(matrix)== 4 ){cv_fpr_svm[j]=matrix[1,2]/(matrix[1,2]+matrix[2,2])}
+   if (length(matrix)== 4 ){cv_fnr_svm[j]=matrix[2,1]/(matrix[2,1]+matrix[1,1])}
+   if (length(matrix)== 4 ){recal[j]=matrix[1,1]/(matrix[1,1]+matrix[2,1])}       
+   if (length(matrix)== 4 ){prec[j]=matrix[1,1]/(matrix[1,1]+matrix[1,2])} 
+    cv_f1_svm[j]= (2*(recal[j]*prec[j])/(recal[j]+prec[j]))    
+  
+   
+      
+  }
+  
+  cv_50acc5_svm <- append(cv_50acc5_svm, mean(cv_acc_svm, na.rm = TRUE))
+  cv_50fpr5_svm <- append(cv_50fpr5_svm, mean(cv_fpr_svm, na.rm = TRUE))
+  cv_50fnr5_svm <- append(cv_50fnr5_svm, mean(cv_fnr_svm, na.rm = TRUE))
+  cv_50f15_svm <- append(cv_50f15_svm, mean(cv_f1_svm, na.rm = TRUE))
+  
+} ## end for
+
+c(cv_acc_svm, cv_f1_svm, cv_fpr_svm,cv_fnr_svm)
+```
+
+```{r}
+boxplot(list(ACC = cv_50acc5_svm, F1 =cv_50f15_svm,  FPR = cv_50fpr5_svm ,FNR = cv_50fnr5_svm), xlab = "Classifier", ylab = "Score", main = "Performance of the SVM classifier (Kidney rejection)", sub="SVM classifier (Kidney rejection): Performance scores of 3-fold 150 repeats Cross-Validation", cex.main=1.3, cex.lab=1.1, cex.axis=1, cex.sub = 0.8, col=c("chocolate1","chartreuse3","cyan3","darkgoldenrod1"), border=c ("chocolate4","chartreuse4","cyan4","darkgoldenrod4"))
+```
+
+```{r}
+X = as.matrix(t(diabetes_top_10_genes))
+y = disease
+```
+
+
+```{r}
+
+X = as.matrix(t(diabetes_top_10_genes))
+y = disease
+cvK = 3  # number of CV folds
+cv_50acc5_knn = cv_50acc5_svm = cv_50acc5_rf = c()
+cv_acc_knn = cv_acc_svm = cv_acc_rf = c()
+
+n_sim = 150 ## number of repeats
+for (i in 1:n_sim) {
+  
+  cvSets = cvTools::cvFolds(nrow(X), cvK)  # permute all the data, into 5 folds
+  cv_acc_knn = cv_acc_svm = cv_acc_rf = c()
+  
+  for (j in 1:cvK) {
+    test_id = cvSets$subsets[cvSets$which == j]
+    X_test = X[test_id, ]
+    X_train = X[-test_id, ]
+    y_test = y[test_id]
+    y_train = y[-test_id]
+    
+    ## KNN
+    k = round(sqrt(length(X_test)))
+    if (k %% 2 != 0) { k = k } ; if (k %% 2 == 0) { k = k - 1}
+    fit5 = class::knn(train = X_train, test = X_test, cl = y_train, k = k)
+    cv_acc_knn[j] = table(fit5, y_test) %>% diag %>% sum %>% `/`(length(y_test))
+    
+    ## SVM
+    svm_res <- e1071::svm(x = X_train, y = as.factor(y_train))
+    fitsvm <- predict(svm_res, X_test)
+    cv_acc_svm[j] = table(fitsvm, y_test) %>% diag %>% sum %>% `/`(length(y_test))
+    
+    ## RandomForest
+    rf_res_diabetes <- randomForest::randomForest(x = X_train, y = as.factor(y_train),mtry=sqrt((ncol(X)-1)))
+    fitrf <- predict(rf_res_diabetes, X_test)
+    cv_acc_rf[j] = table(fitrf, y_test) %>% diag %>% sum %>% `/`(length(y_test))
+  }
+  cv_50acc5_knn <- append(cv_50acc5_knn, median(cv_acc_knn))
+  cv_50acc5_svm <- append(cv_50acc5_svm, median(cv_acc_svm))
+  cv_50acc5_rf <- append(cv_50acc5_rf, median(cv_acc_rf))
+} ## end for
+```
+
+```{r Accuracy type 2 diabetes}
+boxplot(list(KNN = cv_50acc5_knn, SVM =cv_50acc5_svm,  RF = cv_50acc5_rf), xlab = "Classifier", ylab = "Accuracy", main = "Accuracy of the Type 2 diabetes classifiers", sub="Performance comparision of classifiers: Accuracy scores of 3-fold 150 repeats Cross-Validation", cex.main=1.3, cex.lab=1.1, cex.axis=1, cex.sub = 0.8, col=c("chocolate1","chartreuse3","cyan3","darkgoldenrod1"), border=c ("chocolate4","chartreuse4","cyan4","darkgoldenrod4"))
+```
+
+```{r}
+set.seed(0123456789)
+X = as.matrix(t(transplant_10_genes))
+y = rejection_encode_filtered
+
+cvK = 3  # number of CV folds
+cv_50acc5_knn = cv_50acc5_svm = cv_50acc5_rf =cv_50eval_cox = c()
+cv_acc_knn = cv_acc_svm = cv_acc_rf =cv_acc_lasso= c()
+
+n_sim = 150 ## number of repeats
+for (i in 1:n_sim) {
+  
+  cvSets = cvTools::cvFolds(nrow(X), cvK)  # permute all the data, into 5 folds
+  cv_acc_knn = cv_acc_svm = cv_acc_rf = c()
+  
+  for (j in 1:cvK) {
+    test_id = cvSets$subsets[cvSets$which == j]
+    X_test = X[test_id, ]
+    X_train = X[-test_id, ]
+    y_test = y[test_id]
+    y_train = y[-test_id]
+    
+    ## KNN
+    k = round(sqrt(length(X_test)))
+    if (k %% 2 != 0) { k = k } ; if (k %% 2 == 0) { k = k - 1}
+    fit5 = class::knn(train = X_train, test = X_test, cl = y_train, k = k)
+    cv_acc_knn[j] = table(fit5, y_test) %>% diag %>% sum %>% `/`(length(y_test))
+    
+    ## SVM
+    svm_res_rejection <- e1071::svm(x = X_train, y = as.factor(y_train))
+    fit <- predict(svm_res_rejection, X_test)
+    cv_acc_svm[j] = table(fit, y_test) %>% diag %>% sum %>% `/`(length(y_test))
+    
+    ## RandomForest
+    rf_res <- randomForest::randomForest(x = X_train, y = as.factor(y_train),mtry=sqrt((ncol(X)-1)))
+    fit <- predict(rf_res, X_test)
+    cv_acc_rf[j] = table(fit, y_test) %>% diag %>% sum %>% `/`(length(y_test))
+    
+    
+  }
+  cv_50acc5_knn <- append(cv_50acc5_knn, mean(cv_acc_knn))
+  cv_50acc5_svm <- append(cv_50acc5_svm, mean(cv_acc_svm))
+  cv_50acc5_rf <- append(cv_50acc5_rf, mean(cv_acc_rf))
+  
+} ## end for
+```
+The choice of k:
+https://discuss.analyticsvidhya.com/t/how-to-choose-the-value-of-k-in-knn-algorithm/2606/3
+
+```{r accuracy kidney rejection}
+boxplot(list(KNN = cv_50acc5_knn, SVM =cv_50acc5_svm,  RF = cv_50acc5_rf), xlab = "Classifier", ylab = "Accuracy", main = "Accuracy of the Kidney rejection classifiers ", sub="Performance comparision of classifiers: Accuracy scores of 3-fold 150 repeats Cross-Validation", cex.main=1.3, cex.lab=1.1, cex.axis=1, cex.sub = 0.8, col=c("chocolate1","chartreuse3","cyan3"), border=c ("chocolate4","chartreuse4","cyan4"))
+```
+
+
+

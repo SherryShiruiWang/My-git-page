@@ -1,0 +1,264 @@
+---
+title: "Confusion_Matrix 2"
+author: "Sarah Hamilton"
+date: "18/05/2020"
+output: html_document
+---
+
+```{r}
+
+
+library(tidyverse)
+library(limma)
+library (caret)
+library(kableExtra)
+```
+
+
+```{r}
+diabetes_top_10_genes<-read_rds("diabetes_top10_genes.rds")
+rejection_encode_filtered<-readRDS("rejection_encode_filtered.rds")
+transplant_top10_genes<-readRDS("transplant_10_genes.rds")
+disease<-readRDS("disease.rds")
+
+X = as.matrix(t(diabetes_top_10_genes))
+y = disease
+X2 = as.matrix(t(transplant_top10_genes))
+y2 = rejection_encode_filtered
+```
+
+
+
+# Diabetes
+
+
+```{r}
+
+X = X
+y= y
+
+
+cvK = 5  # number of CV folds
+cv_50acc5_rf = c()
+cv_acc_rf =c()
+
+
+cv_50fpr5_rf = c()
+cv_fpr_rf = c()
+
+cv_50fnr5_rf = c()
+cv_fnr_rf = c()
+
+cv_50f15_rf = c()
+cv_f1_rf = c()
+```
+
+
+```{r}
+
+n_sim = 50 ## number of repeats
+for (i in 1:n_sim) {
+
+  cvSets = cvTools::cvFolds(nrow(X), cvK)  # permute all the data, into 5 folds
+  cv_acc_rf = c()
+  cv_fpr_rf = c()
+  cv_fnr_rf = c()
+  cv_f1_rf = c()
+  recal = c()
+  prec = c()
+  
+  for (j in 1:cvK) {
+    test_id = cvSets$subsets[cvSets$which == j]
+    X_test = X[test_id, ]
+    X_train = X[-test_id, ]
+    y_test = y[test_id]
+    y_train = y[-test_id]
+    
+    ## RandomForest
+    rf_res <- randomForest::randomForest(x = X_train, y = as.factor(y_train))
+    fit <- predict(rf_res, X_test)
+    cv_acc_rf[j] = table(fit, y_test) %>% diag %>% sum %>% `/`(length(y_test))
+    
+    
+       matrix<-as.matrix(table(fit, y_test))
+
+   
+   
+   if (length(matrix)== 4 ){cv_fpr_rf[j]=matrix[1,2]/(matrix[1,2]+matrix[2,2])}
+   if (length(matrix)== 4 ){cv_fnr_rf[j]=matrix[2,1]/(matrix[2,1]+matrix[1,1])}
+
+     
+  
+  if (length(matrix)== 4 ){recal[j]=matrix[1,1]/(matrix[1,1]+matrix[2,1])}       
+  if (length(matrix)== 4 ){prec[j]=matrix[1,1]/(matrix[1,1]+matrix[1,2])} 
+  
+  cv_f1_rf[j]= (2*(recal[j]*prec[j])/(recal[j]+prec[j]))     
+      
+  }
+  
+  cv_50acc5_rf <- append(cv_50acc5_rf, mean(cv_acc_rf))
+  
+  cv_50fpr5_rf <- append(cv_50fpr5_rf, mean(cv_fpr_rf))
+  
+
+  cv_50fnr5_rf <- append(cv_50fnr5_rf, mean(cv_fpr_rf))
+  
+  cv_50f15_rf <- append(cv_50f15_rf, mean(cv_f1_rf))
+
+
+
+  
+  cv_50f15_rf <- append(cv_50f15_rf, mean(cv_f1_rf))
+  
+} ## end for
+
+
+```
+
+
+```{r}
+boxplot(list(ACC = cv_50acc5_rf, F1 =cv_50f15_rf,  FPR = cv_50fpr5_rf ,FNR = cv_50fnr5_rf))
+
+```
+
+
+```{r}
+
+acc_sum <- c(round(mean(cv_50acc5_rf, na.rm=TRUE),2), round(sd(cv_50acc5_rf, na.rm=TRUE),2))
+fpr_sum <- c(round(mean(cv_50fpr5_rf, na.rm=TRUE),2), round(sd(cv_50fpr5_rf, na.rm=TRUE),2))
+fnr_sum <- c(round(mean(cv_50fnr5_rf, na.rm=TRUE),2), round(sd(cv_50fnr5_rf, na.rm=TRUE),2))
+F1_sum <- c(round(mean(cv_50f15_rf, na.rm=TRUE),2), round(sd(cv_50f15_rf, na.rm=TRUE),2))
+
+
+
+
+sum_tab<-as.data.frame(rbind(acc_sum, F1_sum, fpr_sum, fnr_sum ))
+rownames(sum_tab) <- c("Accuracy", "F1 Score", "False Positive Rate", "False Negative Rate")
+
+
+
+sum_tab<-kable(sum_tab) %>%kable_styling(bootstrap_options = c("striped", "hover")) 
+sum_tab
+
+```
+
+
+
+# KIDNEY
+
+
+```{r}
+X = X2
+y= y2
+
+
+cvK = 5  # number of CV folds
+cv_50acc5_rf = c()
+cv_acc_rf =c()
+
+
+cv_50fpr5_rf = c()
+cv_fpr_rf = c()
+
+cv_50fnr5_rf = c()
+cv_fnr_rf = c()
+
+cv_50f15_rf = c()
+cv_f1_rf = c()
+```
+
+```{r}
+
+n_sim = 50 ## number of repeats
+for (i in 1:n_sim) {
+
+  cvSets = cvTools::cvFolds(nrow(X), cvK)  # permute all the data, into 5 folds
+  cv_acc_rf = c()
+  cv_fpr_rf = c()
+  cv_fnr_rf = c()
+  cv_f1_rf = c()
+  recal = c()
+  prec = c()
+  
+  for (j in 1:cvK) {
+    test_id = cvSets$subsets[cvSets$which == j]
+    X_test = X[test_id, ]
+    X_train = X[-test_id, ]
+    y_test = y[test_id]
+    y_train = y[-test_id]
+    
+    ## RandomForest
+    rf_res <- randomForest::randomForest(x = X_train, y = as.factor(y_train))
+    fit <- predict(rf_res, X_test)
+    cv_acc_rf[j] = table(fit, y_test) %>% diag %>% sum %>% `/`(length(y_test))
+    
+    
+       matrix<-as.matrix(table(fit, y_test))
+
+   
+   
+   if (length(matrix)== 4 ){cv_fpr_rf[j]=matrix[1,2]/(matrix[1,2]+matrix[2,2])}
+   if (length(matrix)== 4 ){cv_fnr_rf[j]=matrix[2,1]/(matrix[2,1]+matrix[1,1])}
+
+     
+  
+  if (length(matrix)== 4 ){recal[j]=matrix[1,1]/(matrix[1,1]+matrix[2,1])}       
+  if (length(matrix)== 4 ){prec[j]=matrix[1,1]/(matrix[1,1]+matrix[1,2])} 
+  
+  cv_f1_rf[j]= (2*(recal[j]*prec[j])/(recal[j]+prec[j]))     
+      
+  }
+  
+  cv_50acc5_rf <- append(cv_50acc5_rf, mean(cv_acc_rf))
+  
+  cv_50fpr5_rf <- append(cv_50fpr5_rf, mean(cv_fpr_rf))
+  
+
+  cv_50fnr5_rf <- append(cv_50fnr5_rf, mean(cv_fpr_rf))
+  
+  cv_50f15_rf <- append(cv_50f15_rf, mean(cv_f1_rf))
+
+
+
+  
+  cv_50f15_rf <- append(cv_50f15_rf, mean(cv_f1_rf))
+  
+} ## end for
+
+
+```
+
+
+```{r}
+boxplot(list(ACC = cv_50acc5_rf, F1 =cv_50f15_rf,  FPR = cv_50fpr5_rf ,FNR = cv_50fnr5_rf))
+
+```
+
+
+```{r}
+
+acc_sum <- c(round(mean(cv_50acc5_rf, na.rm=TRUE),2), round(sd(cv_50acc5_rf, na.rm=TRUE),2))
+fpr_sum <- c(round(mean(cv_50fpr5_rf, na.rm=TRUE),2), round(sd(cv_50fpr5_rf, na.rm=TRUE),2))
+fnr_sum <- c(round(mean(cv_50fnr5_rf, na.rm=TRUE),2), round(sd(cv_50fnr5_rf, na.rm=TRUE),2))
+F1_sum <- c(round(mean(cv_50f15_rf, na.rm=TRUE),2), round(sd(cv_50f15_rf, na.rm=TRUE),2))
+
+
+
+
+sum_tab<-as.data.frame(rbind(acc_sum, F1_sum, fpr_sum, fnr_sum ))
+rownames(sum_tab) <- c("Accuracy", "F1 Score", "False Positive Rate", "False Negative Rate")
+
+
+
+sum_tab<-kable(sum_tab) %>%kable_styling(bootstrap_options = c("striped", "hover")) 
+sum_tab
+
+```
+
+
+
+
+# Kidney x Diabetes 
+
+# X both accuracy of the tables together
+
