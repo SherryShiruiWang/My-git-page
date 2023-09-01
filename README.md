@@ -1,5 +1,5 @@
 # My-git-page
-A collection and showcase of some codes and (group/individual) projects completed in University.
+A collection and showcase of some codes and (group/individual) projects completed during my studies.
 
 Project language involves Python and R Studio.
 
